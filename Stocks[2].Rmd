@@ -1,0 +1,208 @@
+---
+title: "Stocks"
+author: "data science"
+date: "4/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## recommended packages
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(scales)
+library(RSQLite)
+library(stringr)
+library(tidyverse)
+library(lubridate)
+library(kableExtra)
+
+#### connecting to the database
+conn <- DBI::dbConnect(RSQLite::SQLite(), "C:/Users/david.kimani/Downloads/us_stocks.sqlite")
+
+
+```
+
+```{sql connection=conn, output.var="stocks"}
+with p as (
+select distinct symbol
+FROM prices
+WHERE prices.begins_at = '2020-04-01'
+)
+select f.Download_Date, f.symbol, f.pe_ratio, f.dividend_yield, f.market_cap, t.symbol, t.name, t.country, t.state, t.list_date
+from fundamentals f 
+
+/*
+JOIN TO ADDITIONAL TABLES HERE
+*/
+inner join tickers t on f.symbol = t.symbol 
+inner join p on f.symbol = p.symbol
+
+where lower(t.name) like '%common stock%' AND f.Download_Date IN ('2021-03-17','2020-03-09')
+
+```
+
+
+Create a variable called “grade” to represent a composite score of the percentiles from 3 variables including price earning ratio (25% weight), dividend yield (25% weight) and year over year percent change in market capitization (50% weight). Print a kable of the top 5 stocks by grade with columns symbol, 3 composite variables, 3 percent rank variables and the grade.
+
+
+
+```{r}
+#### CREATE the second histogram, p1,
+##par(mfrow=c(1,2))
+##hist(stocks1$pe_ratio)
+
+stocks1  <-  stocks[,-2]
+
+stocks <- as_tibble(stocks[,-2])
+
+## Assign all pe_ratio > 150 to 150
+clean_150 <- sum(stocks1$pe_ratio > 150, na.rm = TRUE)
+
+stocks <- stocks %>% 
+  mutate(pe_ratio=if_else(pe_ratio>150, 150, pe_ratio))
+
+
+#### Assign all missing (NA) pe_ratio to 200
+stocks <- stocks %>% 
+  mutate(pe_ratio=ifelse(pe_ratio < 0, 200, pe_ratio),
+         pe_ratio = replace_na(pe_ratio, 200)) 
+
+stocks2 <- stocks
+
+#### CREATE the second histogram, p2,
+##hist(stocks2$pe_ratio)
+
+##### CREATE the side by side plots with grid.arrange function for question 2
+#ggplot(data = stocks, aes(pe_ratio))+geom_histogram() +facet_grid(~Download_Date)
+
+#### Clean dividend yeild Assign all missing (NA) dividend_yield to 0
+stocks <- stocks %>% 
+  mutate(dividend_yield = replace_na(dividend_yield, 0))
+
+#### Clean up market capitization for percent change
+stocks <- stocks %>% 
+  mutate(Download_Date = as_date(Download_Date)) %>% 
+   arrange(symbol, Download_Date) %>% 
+   group_by(symbol) %>% 
+  mutate(previous_market_cap = lag(market_cap, order_by=Download_Date))
+
+#### Filter for stocks with available values for market capitization and previous_market_cap, so no missing market capitization values
+stocks <- stocks %>% 
+  filter(!is.na(market_cap) & !is.na(previous_market_cap)) %>% 
+  mutate(market_cap_percent_change = (market_cap - previous_market_cap)/previous_market_cap) %>% 
+  filter(as.character(Download_Date) == "2021-03-17") 
+
+stocks <- ungroup(stocks)
+
+
+#### Create the grade composite score with percentiles for the 3 variable use dplyr percent_rank function
+stocks <- stocks %>% 
+  mutate(Rank1 = rank(-pe_ratio)/length(pe_ratio),
+         Rank2 = rank(dividend_yield)/length(dividend_yield),
+         Rank3 = rank(market_cap_percent_change)/length(market_cap_percent_change),
+         Grade = (0.25*Rank1 + 0.25*Rank1 + 0.5*Rank1)) %>% 
+  arrange(desc(Grade))
+  
+
+```
+
+#### Arrange by desc(Grade) and print kable of the top 5 grades
+
+```{r}
+  top_n(stocks, n=5, wt=Grade) %>% 
+  select(symbol, pe_ratio, dividend_yield, market_cap_percent_change, Rank1, Rank2, Rank3, Grade) %>% 
+ kbl() %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+  
+
+```
+
+#### Questions
+Answer in complete sentences with solutions created with inline code.
+
+1. How many stocks (unique symbols) were available from 2020-03-09 compared to 2021-03-17? Please indicate the total stocks from both dates along with the difference.
+```{r}
+num_stock <- stocks1 %>% 
+  group_by(symbol) %>% 
+  filter(row_number()==1) %>% 
+  group_by(Download_Date) %>% 
+  summarise(number =n()) %>% 
+  mutate(total = sum(number),
+         diff = number[1]-number[2]) 
+
+num_stock %>% 
+  kbl() %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+  
+
+
+```
+
+
+2. How much data was cleaned up for the pe_ratio? Please indicate the total amound of values adjusted to 150 and the total amount of missing values adjusted to 200. Show the impact of data cleaning with side by side histograms.
+
+```{r}
+par(mfrow=c(1,2))
+hist(stocks1$pe_ratio)
+
+#### CREATE the second histogram, p2,
+hist(stocks2$pe_ratio)
+
+clean_150 <- sum(stocks1$pe_ratio > 150, na.rm = TRUE)
+clean_missing <- sum(!is.na(stocks1$pe_ratio))
+
+```
+
+There were `r clean_150` rows cleaned for values greater that 150 and `r clean_missing` rows that had missing values adjusted to 200.
+
+3. Based on the top 100 stocks by grade composite, what is the average market capitization increase?
+
+```{r}
+top_100 <- stocks %>% 
+  top_n(n=100, wt=Grade) 
+
+avg <- mean(top_100$market_cap_percent_change)
+
+```
+
+The average market capitalization stock increase for the top 100 stocks is `r round(avg*100,2)`. 
+
+
+
+4. Based on the top 100 stocks by grade composite, what stock would you pick? Why? Based choice one of the 3 variables such as max dividend yield or min price earning ratio.
+
+```{r}
+a <- top_100[which.max(top_100$dividend_yield),]
+
+
+```
+
+
+Based on the top 100 stock I would pick `r a$name` since it has the higest dividend yield and relatively high per ratio and market capitalization.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
